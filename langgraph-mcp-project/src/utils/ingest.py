@@ -30,7 +30,7 @@ class PostgresIngestor:
         )
         
         self.table_name = "health_records"
-        self.vector_dim = 1536  # Update to match existing database
+        self.vector_dim = 1024  # Update to match existing database
     
     def connect(self):
         """Establish connection to PostgreSQL"""
@@ -139,8 +139,8 @@ class PostgresIngestor:
             documents = loader.load()
             
             text_splitter = RecursiveCharacterTextSplitter(
-                chunk_size=1000,
-                chunk_overlap=100
+                chunk_size=100,
+                chunk_overlap=10
             )
             splits = text_splitter.split_documents(documents)
             

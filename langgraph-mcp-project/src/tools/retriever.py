@@ -1,7 +1,10 @@
 import os
 import psycopg2
 from psycopg2.extras import RealDictCursor
+from typing import Dict, List, Any, Optional, Union
 from langchain_openai import OpenAIEmbeddings
+from langchain_core.runnables import Runnable, RunnableConfig
+from langchain_core.callbacks.manager import CallbackManagerForToolRun
 import numpy as np
 from config.settings import (
     POSTGRES_HOST, POSTGRES_DB, POSTGRES_USER, 
@@ -10,6 +13,8 @@ from config.settings import (
 )
 
 class PostgresRetriever:
+    """Vector database retriever for health records stored in PostgreSQL."""
+    
     def __init__(self):
         # Connection details
         self.db_params = {
@@ -119,7 +124,7 @@ class PostgresRetriever:
         finally:
             conn.close()
     
-    def similarity_search(self, query, top_k=3):
+    def similarity_search(self, query: str, top_k: int = 3) -> List[Dict[str, Any]]:
         """Search for documents similar to the query"""
         # Ensure table exists before querying
         if not self.ensure_table_exists():
@@ -174,21 +179,59 @@ class PostgresRetriever:
         finally:
             conn.close()
 
-def retriever_tool(state):
-    """A retriever that searches health records in PostgreSQL"""
+
+# LangGraph MCP Tool implementation
+class RetrieverTool(Runnable):
+    """LangGraph compatible retriever tool"""
+    
+    def __init__(self, top_k: int = 3):
+        """Initialize the retriever tool"""
+        self.retriever = PostgresRetriever()
+        self.top_k = top_k
+    
+    def invoke(self, query: str, config: Optional[RunnableConfig] = None) -> Dict[str, Any]:
+        """Execute the retriever tool with the given query"""
+        # 获取回调管理器（如果有）
+        run_manager = None
+        if config and config.get("callbacks"):
+            run_manager = config["callbacks"]
+        
+        # 记录操作
+        if run_manager:
+            run_manager.on_text("Retrieving documents for query: " + query)
+        
+        # 从检索器获取结果
+        results = self.retriever.similarity_search(query, self.top_k)
+        
+        # 格式化结果以提高可读性
+        if results:
+            formatted_results = []
+            for i, result in enumerate(results):
+                formatted_results.append(
+                    f"Document {i+1} (similarity: {result['similarity']:.4f}):\n"
+                    f"{result['content']}\n"
+                )
+            
+            retriever_result = "\n".join(formatted_results)
+            
+            # 记录完成
+            if run_manager:
+                run_manager.on_text(f"Retrieved {len(results)} documents")
+        else:
+            retriever_result = "No relevant health records found."
+            
+            # 记录无结果
+            if run_manager:
+                run_manager.on_text("No documents retrieved")
+        
+        return {"retriever_result": retriever_result, "raw_results": results}
+
+# 兼容旧代码的函数
+def retriever_tool(state: Dict[str, Any]) -> Dict[str, Any]:
+    """A retriever that searches health records in PostgreSQL (legacy API)"""
     query = state.get("query", "")
     
-    retriever = PostgresRetriever()
-    results = retriever.similarity_search(query)
+    tool = RetrieverTool()
+    result = tool.invoke(query)
     
-    if results:
-        # Format results for better readability
-        formatted_results = []
-        for i, result in enumerate(results):
-            formatted_results.append(
-                f"Document {i+1} (similarity: {result['similarity']:.4f}):\n"
-                f"{result['content']}\n"
-            )
-        return {"retriever_result": "\n".join(formatted_results)}
-    else:
-        return {"retriever_result": "No relevant health records found."}
+    return {"retriever_result": result["retriever_result"]}
